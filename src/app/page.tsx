@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 
@@ -102,6 +103,16 @@ export default async function QueuePage() {
                     </a>
                   ) : (
                     <span className="text-xs text-slate-400">no url</span>
+                  )}
+                  {lead.business_slug ? (
+                    <Link
+                      href={`/review/${lead.business_slug}`}
+                      className="text-xs font-medium text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
+                    >
+                      Review
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-slate-400">no slug</span>
                   )}
                 </div>
               </li>
