@@ -14,19 +14,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  engineReviewUrl,
-  isAllowedEngineOrigin,
-} from "@/lib/reviewOrigins";
+import { isAllowedEngineOrigin } from "@/lib/reviewOrigins";
 
 type Toast = { id: number; text: string; kind: "info" | "ok" | "warn" };
 
 export default function ReviewHost({
   slug,
   businessName,
+  liveUrl,
 }: {
   slug: string;
   businessName: string | null;
+  liveUrl: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const nonceRef = useRef<string | null>(null);
@@ -100,7 +99,17 @@ export default function ReviewHost({
     pushToast("Disapproved (stub)", "warn");
   }
 
-  const iframeSrc = engineReviewUrl(slug);
+  // Build the iframe src directly from the lead's live_url — the per-deploy
+  // Vercel host where the actual build lives. live_url ends with
+  // "/client/<slug>" (no trailing slash in storage); the engine
+  // `trailingSlash: true` would 308-redirect "/client/<slug>?review=1" to
+  // "/client/<slug>/?review=1" — appending the slash here skips the redirect.
+  // Defensive handling of pre-existing query strings even though live_url has
+  // none today.
+  const reviewQuery = liveUrl.includes("?") ? "&review=1" : "?review=1";
+  const iframeSrc = liveUrl.endsWith("/")
+    ? `${liveUrl}${reviewQuery}`
+    : `${liveUrl}/${reviewQuery}`;
 
   return (
     <div className="fixed inset-0 flex flex-col bg-black text-white">
