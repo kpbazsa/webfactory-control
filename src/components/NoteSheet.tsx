@@ -17,6 +17,12 @@ import { useState } from "react";
 
 export type NoteType = "design" | "defect";
 export type NoteTag = "layout" | "copy" | "color" | "spacing" | "image" | "other";
+// Maps to section_notes.note_action (migration 016). UI labels Memory /
+// Component fix; DB values architect / code_fix. Default 'architect' so the
+// common path is zero extra taps. Only meaningful when type === "design" —
+// defects don't have an architect-vs-code branching and write to a separate
+// table.
+export type NoteAction = "architect" | "code_fix";
 
 const TAG_OPTIONS: NoteTag[] = ["layout", "copy", "color", "spacing", "image", "other"];
 
@@ -24,6 +30,9 @@ export type NoteSubmission = {
   type: NoteType;
   tags: NoteTag[];
   text: string;
+  // Always populated; ReviewHost ignores it for type="defect" since
+  // section_defects has no note_action column.
+  action: NoteAction;
 };
 
 type Props = {
@@ -44,11 +53,14 @@ export default function NoteSheet({
   onCancel,
 }: Props) {
   const [type, setType] = useState<NoteType | null>(null);
+  const [action, setAction] = useState<NoteAction>("architect");
   const [tags, setTags] = useState<Set<NoteTag>>(new Set());
   const [text, setText] = useState("");
 
   if (!open) return null;
 
+  // Action defaults to 'architect' (Memory) and ALWAYS has a value, so it
+  // never gates Save. Save-enable rule unchanged: type chosen AND text non-empty.
   const canSave = type !== null && text.trim().length > 0 && !submitting;
 
   function toggleTag(tag: NoteTag) {
@@ -60,15 +72,24 @@ export default function NoteSheet({
     });
   }
 
+  // When the operator flips type design→defect→design, reset action to
+  // 'architect' rather than preserving a stale code_fix selection — safer
+  // default. handleCancel also resets via reset().
+  function pickType(next: NoteType) {
+    if (next !== type) setAction("architect");
+    setType(next);
+  }
+
   function reset() {
     setType(null);
+    setAction("architect");
     setTags(new Set());
     setText("");
   }
 
   function handleSubmit() {
     if (!canSave || type === null) return;
-    onSubmit({ type, tags: Array.from(tags), text: text.trim() });
+    onSubmit({ type, tags: Array.from(tags), text: text.trim(), action });
     // The parent decides whether to close (on success) or keep open (on
     // failure). We optimistically clear local state on submit; if the
     // parent keeps us open (e.g. RLS reject), the text+selections are gone.
@@ -113,7 +134,7 @@ export default function NoteSheet({
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => setType("design")}
+              onClick={() => pickType("design")}
               className={
                 "rounded-md border px-3 py-2 text-sm font-medium transition-colors " +
                 (type === "design"
@@ -125,7 +146,7 @@ export default function NoteSheet({
             </button>
             <button
               type="button"
-              onClick={() => setType("defect")}
+              onClick={() => pickType("defect")}
               className={
                 "rounded-md border px-3 py-2 text-sm font-medium transition-colors " +
                 (type === "defect"
@@ -137,6 +158,49 @@ export default function NoteSheet({
             </button>
           </div>
         </div>
+
+        {/* Action sub-toggle — appears only under "Design issue". Defect
+            writes to a separate table with no architect-vs-code branching,
+            so the sub-toggle is hidden in that case. */}
+        {type === "design" && (
+          <div className="mb-4">
+            <p className="mb-2 text-xs uppercase tracking-wider text-white/50">
+              Action
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setAction("architect")}
+                className={
+                  "rounded-md border px-3 py-2 text-sm font-medium transition-colors " +
+                  (action === "architect"
+                    ? "border-emerald-400/60 bg-emerald-500/20 text-emerald-100"
+                    : "border-white/20 bg-transparent text-white/80 hover:bg-white/10")
+                }
+              >
+                Memory
+              </button>
+              <button
+                type="button"
+                onClick={() => setAction("code_fix")}
+                className={
+                  "rounded-md border px-3 py-2 text-sm font-medium transition-colors " +
+                  (action === "code_fix"
+                    ? "border-fuchsia-400/60 bg-fuchsia-500/20 text-fuchsia-100"
+                    : "border-white/20 bg-transparent text-white/80 hover:bg-white/10")
+                }
+              >
+                Component fix
+              </button>
+            </div>
+            {action === "code_fix" && (
+              <p className="mt-2 text-xs text-white/50">
+                Proposes a code change to the {componentName} template. Future
+                builds only — existing sites untouched.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Tags — multi-select chips */}
         <div className="mb-4">

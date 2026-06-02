@@ -245,6 +245,11 @@ export default function ReviewHost({
       // section_sentiment is NOT NULL with CHECK in ('positive','negative',
       // 'neutral'). We use 'negative' for every row — every captured note
       // is a constraint / "what not to do", per the 2c design.
+      // note_action splits the design corpus by operator-chosen destiny
+      // (migration 016): 'architect' (Memory, default) feeds the lessons
+      // retriever in homepageArchitect; 'code_fix' (Component fix) marks
+      // a note for the future template-change-proposal loop (Part C).
+      // code_fix notes are captured here but no system acts on them yet.
       const insert = {
         lead_id:           lead.leadId,
         business_slug:     lead.businessSlug,
@@ -259,6 +264,7 @@ export default function ReviewHost({
         section_sentiment: "negative" as const,
         note_text:         note.text,
         tags:              note.tags,
+        note_action:       note.action,
         operator_id:       user.id,
         is_test:           IS_TEST_PHASE,
         // site_review_id intentionally null — Approve/Disapprove writes
