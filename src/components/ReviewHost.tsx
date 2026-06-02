@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { isAllowedEngineOrigin } from "@/lib/reviewOrigins";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -53,12 +54,16 @@ export default function ReviewHost({
   liveUrl: string;
   lead: LeadContext;
 }) {
+  const router = useRouter();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const nonceRef = useRef<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastSeq = useRef(0);
   const [sheet, setSheet] = useState<SheetState>({ open: false });
   const [submitting, setSubmitting] = useState(false);
+  // Guards the verdict-write code path from re-entry on double-tap. Doesn't
+  // affect the button styling — disapprove still requires confirm() first.
+  const [verdictSubmitting, setVerdictSubmitting] = useState(false);
   // Lazy: build the browser Supabase client once. It picks up the operator's
   // auth session from cookies automatically, so RLS-authenticated inserts
   // work directly.
@@ -127,18 +132,91 @@ export default function ReviewHost({
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  // Shared write path for both verdicts. Two writes, ordered:
+  //   1. INSERT into site_reviews — the audit record.
+  //   2. UPDATE leads.approval_status — the gate flip (removes the lead from
+  //      the queue, lets Phase 3 outreach include it once approval_status='approved').
+  // site_reviews first so a UPDATE failure leaves a recoverable audit trail.
+  // The reverse (status flipped, no record) is the silent-corruption case.
+  //
+  // Retry after partial failure CAN produce a second site_reviews row — that's
+  // acceptable: verdicts are append-only audit, last UPDATE wins on the lead.
+  async function writeVerdict(verdict: "approved" | "disapproved") {
+    if (verdictSubmitting) return;
+    setVerdictSubmitting(true);
+
+    const supabase = getSupabase();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setVerdictSubmitting(false);
+      pushToast("Not signed in — verdict not saved", "warn");
+      return;
+    }
+
+    const reviewInsert = {
+      lead_id:       lead.leadId,
+      business_slug: lead.businessSlug,
+      build_date:    lead.buildDate,
+      verdict,
+      reason:        null,
+      operator_id:   user.id,
+      is_test:       IS_TEST_PHASE,
+    };
+    const reviewRes = await supabase.from("site_reviews").insert(reviewInsert);
+    if (reviewRes.error) {
+      console.error("[review] site_reviews insert failed", reviewRes.error);
+      pushToast(`Save failed: ${reviewRes.error.message}`, "warn");
+      setVerdictSubmitting(false);
+      return;
+    }
+
+    const leadUpdate = {
+      approval_status: verdict,
+      approval_at:     new Date().toISOString(),
+      approved_by:     user.id,
+    };
+    const leadRes = await supabase
+      .from("leads")
+      .update(leadUpdate)
+      .eq("id", lead.leadId);
+    if (leadRes.error) {
+      console.error("[review] leads update failed", leadRes.error);
+      // Audit row already exists; surface the partial-write so the operator
+      // can retry. Staying put (no navigation) lets a re-tap re-attempt — the
+      // duplicate site_reviews row from a retry is acceptable.
+      pushToast(
+        `Verdict recorded but status update failed: ${leadRes.error.message}`,
+        "warn",
+      );
+      setVerdictSubmitting(false);
+      return;
+    }
+
+    pushToast(verdict === "approved" ? "Approved" : "Disapproved", "ok");
+    // Back to the queue — the lead is now non-NULL approval_status and the
+    // queue's `.is("approval_status", null)` filter will exclude it.
+    router.push("/");
+  }
+
   function handleApprove() {
-    // STUB — next chip wires this to site_reviews + leads.approval_status.
-    // Do not add the Supabase write here.
-    console.log("[review] approve", { slug });
-    pushToast("Approved (stub)", "ok");
+    void writeVerdict("approved");
   }
 
   function handleDisapprove() {
-    // STUB — next chip wires this to site_reviews + leads.approval_status.
-    // Do not add the Supabase write here.
-    console.log("[review] disapprove", { slug });
-    pushToast("Disapproved (stub)", "warn");
+    // Confirm guard — disapprove sends the lead to the rejects bucket
+    // (Phase 3 outreach gate will require approval_status='approved', so
+    // 'disapproved' is functionally a soft delete from a sales POV). Approve
+    // is one-tap; disapprove needs the operator to mean it.
+    if (
+      !window.confirm(
+        `Disapprove "${businessName ?? slug}"? This removes it from the review queue.`,
+      )
+    ) {
+      return;
+    }
+    void writeVerdict("disapproved");
   }
 
   async function handleNoteSubmit(note: NoteSubmission) {
