@@ -10,9 +10,16 @@ export default async function ReviewPage({ params }: PageProps) {
   const { slug } = params;
 
   const supabase = createClient();
+  // Pull the columns the NoteSheet inserts need: id (FK on section_notes /
+  // section_defects), build_date + the retrieval dimensions (industry,
+  // apify_category, location) carried onto every note row, plus the
+  // business_name and live_url the chrome already used. No insert is done
+  // server-side; this lookup just feeds the client component its context.
   const { data, error } = await supabase
     .from("leads")
-    .select("business_name, business_slug, live_url")
+    .select(
+      "id, business_name, business_slug, live_url, build_date, industry, apify_category, location",
+    )
     .eq("business_slug", slug)
     .maybeSingle();
 
@@ -28,6 +35,14 @@ export default async function ReviewPage({ params }: PageProps) {
       slug={slug}
       businessName={data.business_name}
       liveUrl={data.live_url}
+      lead={{
+        leadId:         data.id,
+        businessSlug:   data.business_slug ?? slug,
+        buildDate:      data.build_date,
+        industry:       data.industry,
+        apifyCategory:  data.apify_category,
+        location:       data.location,
+      }}
     />
   );
 }
