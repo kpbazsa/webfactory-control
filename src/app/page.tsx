@@ -31,7 +31,7 @@ export default async function QueuePage() {
     .select(
       "id, business_name, industry, location, live_url, business_slug, build_date",
     )
-    .eq("status", "built")
+    .in("status", ["built", "manual_review"])
     .is("approval_status", null)
     .order("build_date", { ascending: false });
 
