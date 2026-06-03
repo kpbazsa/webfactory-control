@@ -51,7 +51,15 @@ export default async function QueuePage() {
                 : `${leads.length} site${leads.length === 1 ? "" : "s"} awaiting review`}
             </p>
           </div>
-          <SignOutButton />
+          <div className="flex items-center gap-4">
+            <Link
+              href="/changes"
+              className="text-sm text-slate-600 hover:text-slate-900 underline-offset-4 hover:underline"
+            >
+              Changes
+            </Link>
+            <SignOutButton />
+          </div>
         </div>
       </header>
 

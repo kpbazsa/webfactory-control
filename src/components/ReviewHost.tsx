@@ -28,6 +28,11 @@ import NoteSheet, { type NoteSubmission } from "./NoteSheet";
 // the migration's default — they must match.
 const IS_TEST_PHASE = true;
 
+// Mirrors builder src/control/intentKinds.js PROPOSAL_REQUEST. The two repos
+// don't share a package (different framework generations), so this string is
+// duplicated by hand — keep in sync if the builder constant ever changes.
+const PROPOSAL_REQUEST = "template_change_proposal_request";
+
 type Toast = { id: number; text: string; kind: "info" | "ok" | "warn" };
 
 type SheetState =
@@ -240,6 +245,7 @@ export default function ReviewHost({
     const sectionIndex = sheet.sectionIndex;
 
     let error: { message: string } | null = null;
+    let newNoteId: string | null = null;
     if (note.type === "design") {
       // design issue → section_notes (the learning corpus).
       // section_sentiment is NOT NULL with CHECK in ('positive','negative',
@@ -271,8 +277,9 @@ export default function ReviewHost({
         // site_reviews in the next chip; until then notes float free of any
         // verdict.
       };
-      const res = await supabase.from("section_notes").insert(insert);
+      const res = await supabase.from("section_notes").insert(insert).select("id").single();
       error = res.error;
+      newNoteId = res.data?.id ?? null;
     } else {
       // defect → section_defects (pipeline-health signal; architect never reads).
       const insert = {
@@ -302,10 +309,27 @@ export default function ReviewHost({
     }
 
     setSheet({ open: false });
-    pushToast(
-      note.type === "design" ? "Note saved" : "Defect saved",
-      "ok",
-    );
+
+    // Producer: a code_fix design note must enqueue a proposal-request intent
+    // so the builder's proposalWorker has something to poll. Orphan-handling
+    // (design doc Part C): the note is already saved at this point — if the
+    // intent insert fails, log + warn but keep the note rather than rolling back.
+    if (note.type === "design" && note.action === "code_fix" && newNoteId) {
+      const intentRes = await supabase.from("control_intents").insert({
+        kind: PROPOSAL_REQUEST,
+        payload: { note_id: newNoteId, component_name: componentName },
+        requested_by: user.id,
+      });
+      if (intentRes.error) {
+        console.error("[review] code_fix intent enqueue failed", intentRes.error);
+        pushToast("Note saved — fix request didn't queue (logged)", "warn");
+      } else {
+        pushToast("Fix request queued", "ok");
+      }
+      return;
+    }
+
+    pushToast(note.type === "design" ? "Note saved" : "Defect saved", "ok");
   }
 
   function handleNoteCancel() {
@@ -333,12 +357,20 @@ export default function ReviewHost({
           </p>
           <p className="truncate text-xs text-white/50">{slug}</p>
         </div>
-        <Link
-          href="/"
-          className="shrink-0 rounded-md border border-white/20 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
-        >
-          ← Queue
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/changes"
+            className="rounded-md border border-white/20 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+          >
+            Changes
+          </Link>
+          <Link
+            href="/"
+            className="rounded-md border border-white/20 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+          >
+            ← Queue
+          </Link>
+        </div>
       </header>
 
       <div className="relative flex-1 overflow-hidden">
