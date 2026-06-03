@@ -30,6 +30,16 @@ export type Bounce = {
   createdAt: string;
 };
 
+export type FailedCommit = {
+  id: string;
+  component_name: string;
+  diff_unified: string;
+  llm_rationale: string | null;
+  commit_error: string;
+  approved_at: string | null;
+  created_at: string;
+};
+
 type Toast = { id: number; text: string; kind: "info" | "ok" | "warn" };
 
 function formatDate(value: string | null): string {
@@ -89,9 +99,11 @@ function DiffView({ diff }: { diff: string }) {
 export default function ChangesHost({
   proposals,
   bounces = [],
+  failedCommits = [],
 }: {
   proposals: Proposal[];
   bounces?: Bounce[];
+  failedCommits?: FailedCommit[];
 }) {
   const router = useRouter();
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -261,6 +273,61 @@ export default function ChangesHost({
     router.refresh();
   }
 
+  // Triage: the commit to engine main failed (re-test moved under it, or a push
+  // error). Retry clears commit_error so the handler's poll re-picks the row and
+  // re-attempts; the approval stands. Use this for transient failures.
+  async function handleRetryCommit(fc: FailedCommit) {
+    if (submittingId) return;
+    setSubmittingId(fc.id);
+    const supabase = getSupabase();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setSubmittingId(null); pushToast("Not signed in — not saved", "warn"); return; }
+    const res = await supabase
+      .from("template_change_proposals")
+      .update({ commit_error: null })
+      .eq("id", fc.id)
+      .eq("approval_status", "approved")
+      .is("commit_sha", null);
+    if (res.error) {
+      console.error("[changes] retry-commit failed", res.error);
+      pushToast("Retry failed: " + res.error.message, "warn");
+      setSubmittingId(null);
+      return;
+    }
+    pushToast("Re-queued for commit", "ok");
+    setSubmittingId(null);
+    router.refresh();
+  }
+
+  // Triage: abandon an approved change whose commit kept failing. Flip it to
+  // rejected; the original approved_by/approved_at stay as the historic approval
+  // record (this row WAS genuinely approved earlier — only the reason is added).
+  async function handleRejectFailedCommit(fc: FailedCommit) {
+    if (submittingId) return;
+    const reason = window.prompt(
+      "Reject the " + fc.component_name + " commit?\n\nThis abandons the approved change. Optional reason (blank to reject without one):",
+    );
+    if (reason === null) return;
+    setSubmittingId(fc.id);
+    const supabase = getSupabase();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setSubmittingId(null); pushToast("Not signed in — not saved", "warn"); return; }
+    const res = await supabase
+      .from("template_change_proposals")
+      .update({ approval_status: "rejected", approval_reason: reason.trim() || null })
+      .eq("id", fc.id)
+      .eq("approval_status", "approved");
+    if (res.error) {
+      console.error("[changes] reject-commit failed", res.error);
+      pushToast("Reject failed: " + res.error.message, "warn");
+      setSubmittingId(null);
+      return;
+    }
+    pushToast("Rejected", "ok");
+    setSubmittingId(null);
+    router.refresh();
+  }
+
   return (
     <div className="relative">
       {proposals.length === 0 ? (
@@ -387,6 +454,66 @@ export default function ChangesHost({
                         {busy ? "Saving…" : "Code issue"}
                       </button>
                     </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {failedCommits.length > 0 && (
+        <div className="mt-10">
+          <h2 className="text-sm font-semibold text-slate-900 mb-1">
+            Commits needing attention ({failedCommits.length})
+          </h2>
+          <p className="text-xs text-slate-500 mb-4">
+            These changes were approved but the commit to the engine did not complete. Review the error, then Retry to re-attempt the commit or Reject to abandon the change.
+          </p>
+          <ul className="space-y-4">
+            {failedCommits.map((fc) => {
+              const busy = submittingId === fc.id;
+              const locked = submittingId !== null;
+              return (
+                <li key={fc.id} className="bg-white border border-red-200 rounded-md p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">{fc.component_name}</p>
+                      <p className="text-xs text-slate-500">approved {formatDate(fc.approved_at)}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-red-50 border border-red-200 px-2.5 py-0.5 text-xs font-medium text-red-700">
+                      commit failed
+                    </span>
+                  </div>
+
+                  {fc.llm_rationale && (
+                    <p className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">{fc.llm_rationale}</p>
+                  )}
+
+                  <DiffView diff={fc.diff_unified} />
+
+                  <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                    <p className="font-medium">Commit error</p>
+                    <pre className="mt-1 font-mono whitespace-pre-wrap">{fc.commit_error}</pre>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleRejectFailedCommit(fc)}
+                      disabled={locked}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {busy ? "…" : "Reject"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRetryCommit(fc)}
+                      disabled={locked}
+                      className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 active:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {busy ? "Saving…" : "Retry"}
+                    </button>
                   </div>
                 </li>
               );

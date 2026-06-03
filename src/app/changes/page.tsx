@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "../sign-out-button";
-import ChangesHost, { type Proposal, type Bounce } from "./ChangesHost";
+import ChangesHost, { type Proposal, type Bounce, type FailedCommit } from "./ChangesHost";
 
 // Test phase: show ALL pending proposals regardless of is_test. Mirrors
 // ReviewHost's IS_TEST_PHASE — flip both together at launch so the /changes
@@ -67,6 +67,22 @@ export default async function ChangesPage() {
     };
   });
 
+  // Failed commits: proposals the operator approved but whose commit to the
+  // engine did not complete (commit_error set, commit_sha still null). The
+  // commit handler stops retrying these; surface them for Retry/Reject.
+  let fcQuery = supabase
+    .from("template_change_proposals")
+    .select(
+      "id, component_name, diff_unified, llm_rationale, commit_error, approved_at, created_at",
+    )
+    .eq("approval_status", "approved")
+    .is("commit_sha", null)
+    .not("commit_error", "is", null)
+    .order("approved_at", { ascending: false });
+  if (!IS_TEST_PHASE) fcQuery = fcQuery.eq("is_test", false);
+  const { data: fcData } = await fcQuery;
+  const failedCommits = (fcData ?? []) as FailedCommit[];
+
   return (
     <main className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
@@ -102,7 +118,7 @@ export default async function ChangesPage() {
             </p>
           </div>
         ) : (
-          <ChangesHost proposals={proposals} bounces={bounces} />
+          <ChangesHost proposals={proposals} bounces={bounces} failedCommits={failedCommits} />
         )}
       </div>
     </main>
