@@ -431,10 +431,21 @@ export default function ReviewHost({
           </button>
         </div>
         <p className="truncate text-center text-xs text-white/50">
-          Pitch will be sent to{" "}
-          <span className="font-medium text-white/80">
-            {email ?? "— no email on file —"}
-          </span>
+          {IS_TEST_PHASE ? (
+            email ? (
+              <>Test phase — redirected to your test inbox; live target:{" "}
+                <span className="font-medium text-white/80">{email}</span>
+              </>
+            ) : (
+              <>Test phase — redirected to your test inbox</>
+            )
+          ) : (
+            <>Pitch will be sent to{" "}
+              <span className="font-medium text-white/80">
+                {email ?? "— no email on file —"}
+              </span>
+            </>
+          )}
         </p>
       </footer>
     </div>
