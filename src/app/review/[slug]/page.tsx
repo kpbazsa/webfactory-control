@@ -18,7 +18,7 @@ export default async function ReviewPage({ params }: PageProps) {
   const { data, error } = await supabase
     .from("leads")
     .select(
-      "id, business_name, business_slug, live_url, build_date, industry, apify_category, location",
+      "id, business_name, email, business_slug, live_url, build_date, industry, apify_category, location",
     )
     .eq("business_slug", slug)
     .maybeSingle();
@@ -34,6 +34,7 @@ export default async function ReviewPage({ params }: PageProps) {
     <ReviewHost
       slug={slug}
       businessName={data.business_name}
+      email={data.email ?? null}
       liveUrl={data.live_url}
       lead={{
         leadId:         data.id,

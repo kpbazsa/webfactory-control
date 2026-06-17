@@ -52,11 +52,13 @@ export default function ReviewHost({
   slug,
   businessName,
   liveUrl,
+  email,
   lead,
 }: {
   slug: string;
   businessName: string | null;
   liveUrl: string;
+  email: string | null;
   lead: LeadContext;
 }) {
   const router = useRouter();
@@ -411,21 +413,29 @@ export default function ReviewHost({
         </div>
       </div>
 
-      <footer className="flex items-center gap-3 border-t border-white/10 bg-black/90 px-4 py-3">
-        <button
-          type="button"
-          onClick={handleDisapprove}
-          className="flex-1 rounded-md bg-rose-600 px-4 py-3 text-sm font-semibold text-white hover:bg-rose-500 active:bg-rose-700"
-        >
-          Disapprove
-        </button>
-        <button
-          type="button"
-          onClick={handleApprove}
-          className="flex-1 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-500 active:bg-emerald-700"
-        >
-          Approve
-        </button>
+      <footer className="flex flex-col gap-2 border-t border-white/10 bg-black/90 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleDisapprove}
+            className="flex-1 rounded-md bg-rose-600 px-4 py-3 text-sm font-semibold text-white hover:bg-rose-500 active:bg-rose-700"
+          >
+            Disapprove
+          </button>
+          <button
+            type="button"
+            onClick={handleApprove}
+            className="flex-1 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-500 active:bg-emerald-700"
+          >
+            Approve
+          </button>
+        </div>
+        <p className="truncate text-center text-xs text-white/50">
+          Pitch will be sent to{" "}
+          <span className="font-medium text-white/80">
+            {email ?? "— no email on file —"}
+          </span>
+        </p>
       </footer>
     </div>
   );
