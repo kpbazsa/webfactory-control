@@ -29,10 +29,9 @@ export default async function QueuePage() {
   const { data, error } = await supabase
     .from("leads")
     .select(
-      "id, business_name, industry, location, live_url, business_slug, build_date",
+      "id, business_name, industry, location, live_url, business_slug, build_date, visual_qa_status",
     )
     .eq("status", "built")
-    .or("visual_qa_status.is.null,visual_qa_status.eq.passed")
     .not("email", "is", null)
     .is("approval_status", null)
     .order("build_date", { ascending: false });
