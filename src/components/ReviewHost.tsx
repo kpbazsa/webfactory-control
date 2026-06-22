@@ -122,6 +122,13 @@ export default function ReviewHost({
   const [emailValue, setEmailValue] = useState(email ?? "");
   const [savingEmail, setSavingEmail] = useState(false);
   const [emailError, setEmailError] = useState("");
+  // QA-flag note capture — independent of the verdict path (like the email edit).
+  // `qaNote` holds the target being noted: the issue's section_hint + observation,
+  // or { sectionType:'page-level', observation:null } for a build-level note.
+  const [qaNote, setQaNote] = useState<{ sectionType: string; observation: string | null } | null>(null);
+  const [qaNoteText, setQaNoteText] = useState("");
+  const [savingQaNote, setSavingQaNote] = useState(false);
+  const [qaNoteError, setQaNoteError] = useState("");
   // Lazy: build the browser Supabase client once. It picks up the operator's
   // auth session from cookies automatically, so RLS-authenticated inserts
   // work directly.
@@ -320,6 +327,78 @@ export default function ReviewHost({
     setEditingEmail(false);
     setSavingEmail(false);
     pushToast("Email updated", "ok");
+  }
+
+  // ── QA-flag note — writes section_notes with note_action='qa' ────────────────
+  // Independent of the verdict: an operator notes what QA should catch next time
+  // without approving. The note feeds qaLessonsRetriever (builder) which injects
+  // it back into the QA prompt. Never touches approval_status.
+  function startQaNote(sectionType: string, observation: string | null) {
+    setQaNote({ sectionType, observation });
+    setQaNoteText("");
+    setQaNoteError("");
+  }
+
+  function cancelQaNote() {
+    setQaNote(null);
+    setQaNoteError("");
+  }
+
+  async function saveQaNote() {
+    if (savingQaNote || !qaNote) return;
+    const text = qaNoteText.trim();
+    if (!text) {
+      setQaNoteError("Enter a note before saving.");
+      return;
+    }
+    setSavingQaNote(true);
+    setQaNoteError("");
+
+    const supabase = getSupabase();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setQaNoteError("Not signed in — note not saved.");
+      setSavingQaNote(false);
+      return;
+    }
+
+    // Section scoping: section_index/section_type are NOT NULL, but a QA issue's
+    // section_hint can't be mapped to a real iframe section_index here in Control
+    // (this note targets the QA verdict, not a clicked section). So we use the
+    // APPROVED sentinel — section_index = -1 — and store the hint (or 'page-level')
+    // as section_type. The Phase-4 qaLessonsRetriever matches on the build
+    // dimensions (industry/apify_category/location), not on section_index.
+    const { error } = await supabase.from("section_notes").insert({
+      lead_id:           lead.leadId,
+      business_slug:     lead.businessSlug,
+      build_date:        lead.buildDate,
+      industry:          lead.industry,
+      apify_category:    lead.apifyCategory,
+      location:          lead.location,
+      section_index:     -1, // sentinel — QA note is not tied to a clicked section
+      section_type:      qaNote.sectionType, // issue section_hint, or 'page-level'
+      section_sentiment: "negative", // matches the design-note convention
+      note_text:         text,
+      tags:              [],
+      note_action:       "qa", // feeds qaLessonsRetriever → visual QA prompt
+      operator_id:       user.id,
+      is_test:           IS_TEST_PHASE,
+      // Deliberately does NOT write approval_status — QA notes are independent of
+      // the verdict path, same separation as the inline email edit.
+    });
+    if (error) {
+      console.error("[review] qa note insert failed", error);
+      setQaNoteError(`Save failed: ${error.message}`);
+      setSavingQaNote(false);
+      return;
+    }
+
+    setQaNote(null);
+    setQaNoteText("");
+    setSavingQaNote(false);
+    pushToast("QA note saved", "ok");
   }
 
   async function handleNoteSubmit(note: NoteSubmission) {
@@ -533,20 +612,29 @@ export default function ReviewHost({
               {issues.length > 0 ? (
                 <ul className="mt-2 space-y-1">
                   {issues.map((it, i) => (
-                    <li key={i} className="text-white/60">
-                      <span
-                        className={
-                          it.severity === "critical"
-                            ? "text-rose-400"
-                            : it.severity === "major"
-                              ? "text-amber-400"
-                              : "text-white/40"
-                        }
+                    <li key={i} className="flex items-start justify-between gap-2 text-white/60">
+                      <span>
+                        <span
+                          className={
+                            it.severity === "critical"
+                              ? "text-rose-400"
+                              : it.severity === "major"
+                                ? "text-amber-400"
+                                : "text-white/40"
+                          }
+                        >
+                          [{it.severity}]
+                        </span>{" "}
+                        {it.observation}{" "}
+                        <span className="text-white/35">@ {it.section_hint}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => startQaNote(it.section_hint, it.observation)}
+                        className="shrink-0 text-white/40 underline decoration-white/30 underline-offset-2 hover:text-white/80"
                       >
-                        [{it.severity}]
-                      </span>{" "}
-                      {it.observation}{" "}
-                      <span className="text-white/35">@ {it.section_hint}</span>
+                        Note
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -555,9 +643,53 @@ export default function ReviewHost({
               ) : (
                 <p className="mt-2 text-white/40">No issues recorded for this build.</p>
               )}
+              <button
+                type="button"
+                onClick={() => startQaNote("page-level", null)}
+                className="mt-2 text-white/50 underline decoration-white/30 underline-offset-2 hover:text-white/80"
+              >
+                Note this QA flag (build-level)
+              </button>
             </details>
           );
         })()}
+        {qaNote && (
+          <div className="rounded-md border border-white/15 bg-white/[0.04] px-3 py-2 text-xs">
+            <p className="text-white/60">
+              Noting QA <span className="text-white/80">@ {qaNote.sectionType}</span>
+              {qaNote.observation && (
+                <span className="text-white/40"> — {qaNote.observation}</span>
+              )}
+            </p>
+            <textarea
+              value={qaNoteText}
+              onChange={(e) => setQaNoteText(e.target.value)}
+              placeholder="What should QA catch here next time?"
+              rows={3}
+              autoFocus
+              className="mt-2 w-full resize-none rounded-md border border-white/20 bg-black/40 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
+            />
+            {qaNoteError && <p className="mt-1 text-rose-400">{qaNoteError}</p>}
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void saveQaNote()}
+                disabled={savingQaNote}
+                className="rounded-md bg-emerald-600 px-3 py-1.5 font-semibold text-white hover:bg-emerald-500 active:bg-emerald-700 disabled:opacity-50"
+              >
+                {savingQaNote ? "Saving…" : "Save QA note"}
+              </button>
+              <button
+                type="button"
+                onClick={cancelQaNote}
+                disabled={savingQaNote}
+                className="rounded-md border border-white/20 px-3 py-1.5 text-white/80 hover:bg-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-3">
           <button
             type="button"
