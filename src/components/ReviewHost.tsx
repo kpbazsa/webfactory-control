@@ -33,6 +33,11 @@ const IS_TEST_PHASE = true;
 // duplicated by hand — keep in sync if the builder constant ever changes.
 const PROPOSAL_REQUEST = "template_change_proposal_request";
 
+// Minimal email shape check for the inline email edit. Deliberately lenient
+// (one @, a dot in the domain) — the operator is correcting a scraped address,
+// not registering an account; outreach (builder) is the real deliverability gate.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 type Toast = { id: number; text: string; kind: "info" | "ok" | "warn" };
 
 type SheetState =
@@ -71,6 +76,15 @@ export default function ReviewHost({
   // Guards the verdict-write code path from re-entry on double-tap. Doesn't
   // affect the button styling — disapprove still requires confirm() first.
   const [verdictSubmitting, setVerdictSubmitting] = useState(false);
+  // Inline email edit — fully independent of the verdict path. `emailValue` is
+  // the live saved address (so the display updates after a save without a page
+  // reload); `emailDraft` backs the input; `editingEmail` toggles the input;
+  // `savingEmail` guards the write; `emailError` shows a validation/write line.
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [emailDraft, setEmailDraft] = useState(email ?? "");
+  const [emailValue, setEmailValue] = useState(email ?? "");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailError, setEmailError] = useState("");
   // Lazy: build the browser Supabase client once. It picks up the operator's
   // auth session from cookies automatically, so RLS-authenticated inserts
   // work directly.
@@ -224,6 +238,51 @@ export default function ReviewHost({
       return;
     }
     void writeVerdict("disapproved");
+  }
+
+  // ── Inline email edit — email-only write, never touches approval_status ──────
+  // Independent of writeVerdict: an operator can correct a scraped address
+  // without approving, and re-edit freely. Writes leads.email through the same
+  // browser-anon client the verdict path uses.
+  function startEmailEdit() {
+    setEmailDraft(emailValue);
+    setEmailError("");
+    setEditingEmail(true);
+  }
+
+  function cancelEmailEdit() {
+    setEditingEmail(false);
+    setEmailError("");
+  }
+
+  async function saveEmail() {
+    if (savingEmail) return;
+    const trimmed = emailDraft.trim();
+    // Require a valid address — clearing the email would silently break outreach.
+    // "No send" is what Disapprove is for, not an empty email.
+    if (!EMAIL_RE.test(trimmed)) {
+      setEmailError("Enter a valid email address.");
+      return;
+    }
+    setSavingEmail(true);
+    setEmailError("");
+
+    const supabase = getSupabase();
+    const { error } = await supabase
+      .from("leads")
+      .update({ email: trimmed })
+      .eq("id", lead.leadId);
+    if (error) {
+      console.error("[review] leads email update failed", error);
+      setEmailError(`Save failed: ${error.message}`);
+      setSavingEmail(false);
+      return;
+    }
+
+    setEmailValue(trimmed);
+    setEditingEmail(false);
+    setSavingEmail(false);
+    pushToast("Email updated", "ok");
   }
 
   async function handleNoteSubmit(note: NoteSubmission) {
@@ -430,23 +489,66 @@ export default function ReviewHost({
             Approve
           </button>
         </div>
-        <p className="truncate text-center text-xs text-white/50">
-          {IS_TEST_PHASE ? (
-            email ? (
-              <>Test phase — redirected to your test inbox; live target:{" "}
-                <span className="font-medium text-white/80">{email}</span>
-              </>
-            ) : (
-              <>Test phase — redirected to your test inbox</>
-            )
-          ) : (
-            <>Pitch will be sent to{" "}
-              <span className="font-medium text-white/80">
-                {email ?? "— no email on file —"}
-              </span>
-            </>
-          )}
-        </p>
+        {editingEmail ? (
+          <div className="flex flex-col items-center gap-1">
+            <div className="flex w-full items-center justify-center gap-2">
+              <input
+                type="email"
+                value={emailDraft}
+                onChange={(e) => setEmailDraft(e.target.value)}
+                placeholder="name@example.com"
+                autoFocus
+                className="w-full max-w-xs rounded-md border border-white/20 bg-black/40 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => void saveEmail()}
+                disabled={savingEmail}
+                className="shrink-0 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 active:bg-emerald-700 disabled:opacity-50"
+              >
+                {savingEmail ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={cancelEmailEdit}
+                disabled={savingEmail}
+                className="shrink-0 rounded-md border border-white/20 px-3 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+            {emailError && (
+              <p className="text-center text-xs text-rose-400">{emailError}</p>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-2 text-xs text-white/50">
+            <span className="min-w-0 truncate">
+              {IS_TEST_PHASE ? (
+                emailValue ? (
+                  <>Test phase — redirected to your test inbox; live target:{" "}
+                    <span className="font-medium text-white/80">{emailValue}</span>
+                  </>
+                ) : (
+                  <>Test phase — redirected to your test inbox</>
+                )
+              ) : (
+                <>Pitch will be sent to{" "}
+                  <span className="font-medium text-white/80">
+                    {emailValue || "— no email on file —"}
+                  </span>
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={startEmailEdit}
+              className="shrink-0 underline decoration-white/40 underline-offset-2 hover:text-white/80"
+            >
+              Edit
+            </button>
+          </div>
+        )}
       </footer>
     </div>
   );
