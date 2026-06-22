@@ -6,7 +6,7 @@ import ChangesHost, { type Proposal, type Bounce, type FailedCommit } from "./Ch
 // Test phase: show ALL pending proposals regardless of is_test. Mirrors
 // ReviewHost's IS_TEST_PHASE — flip both together at launch so the /changes
 // queue stops showing test-phase proposals.
-const IS_TEST_PHASE = true;
+const IS_TEST_PHASE = false;
 
 export default async function ChangesPage() {
   const supabase = createClient();

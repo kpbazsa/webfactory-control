@@ -26,7 +26,7 @@ import NoteSheet, { type NoteSubmission } from "./NoteSheet";
 // Hard filter so test-phase notes never reach the architect. Flip to false
 // at launch (and consider an UPDATE on existing test rows then). Mirrors
 // the migration's default — they must match.
-const IS_TEST_PHASE = true;
+const IS_TEST_PHASE = false;
 
 // Mirrors builder src/control/intentKinds.js PROPOSAL_REQUEST. The two repos
 // don't share a package (different framework generations), so this string is
