@@ -18,7 +18,7 @@ export default async function ReviewPage({ params }: PageProps) {
   const { data, error } = await supabase
     .from("leads")
     .select(
-      "id, business_name, email, business_slug, live_url, build_date, industry, apify_category, location",
+      "id, business_name, email, business_slug, live_url, build_date, industry, apify_category, location, visual_qa_status",
     )
     .eq("business_slug", slug)
     .maybeSingle();
@@ -30,12 +30,32 @@ export default async function ReviewPage({ params }: PageProps) {
     notFound();
   }
 
+  // QA reason for the badge: the bare verdict lives on leads.visual_qa_status,
+  // but the detail (score + issues) lives in visual_qa_runs — one row per QA
+  // attempt. Pull the LATEST run for this lead. RLS is disabled on
+  // visual_qa_runs (migration 006), so the operator-auth client reads it
+  // directly. Fail-soft: a missing/erroring run just yields a status-only badge.
+  const { data: qaRun } = await supabase
+    .from("visual_qa_runs")
+    .select("passed, overall_score, issues, error, created_at")
+    .eq("lead_id", data.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
   return (
     <ReviewHost
       slug={slug}
       businessName={data.business_name}
       email={data.email ?? null}
       liveUrl={data.live_url}
+      qa={{
+        status: data.visual_qa_status ?? null,
+        passed: qaRun?.passed ?? null,
+        score:  qaRun?.overall_score ?? null,
+        issues: qaRun?.issues ?? null,
+        error:  qaRun?.error ?? null,
+      }}
       lead={{
         leadId:         data.id,
         businessSlug:   data.business_slug ?? slug,

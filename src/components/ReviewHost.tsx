@@ -38,6 +38,24 @@ const PROPOSAL_REQUEST = "template_change_proposal_request";
 // not registering an account; outreach (builder) is the real deliverability gate.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Human label + chip colour for a visual_qa_status value. Outreach no longer
+// gates on QA (approval is the authority) — this badge just shows the operator
+// WHAT QA flagged before they decide.
+function qaBadge(status: string | null): { label: string; cls: string } {
+  switch (status) {
+    case "passed":
+      return { label: "QA passed", cls: "bg-emerald-600/20 text-emerald-300 border-emerald-500/30" };
+    case "failed_qa_layer":
+      return { label: "QA failed — layer error", cls: "bg-rose-600/20 text-rose-300 border-rose-500/30" };
+    case "failed_max_iterations":
+      return { label: "QA failed — max iterations", cls: "bg-amber-600/20 text-amber-300 border-amber-500/30" };
+    case "skipped":
+      return { label: "QA skipped", cls: "bg-zinc-600/20 text-zinc-300 border-zinc-500/30" };
+    default:
+      return { label: "QA: not run", cls: "bg-zinc-600/20 text-zinc-400 border-zinc-500/30" };
+  }
+}
+
 type Toast = { id: number; text: string; kind: "info" | "ok" | "warn" };
 
 type SheetState =
@@ -53,17 +71,36 @@ export type LeadContext = {
   location: string | null;
 };
 
+// Visual-QA verdict for the badge. `status` is the authoritative bare verdict
+// from leads.visual_qa_status; the rest is detail from the latest visual_qa_runs
+// row (may be absent for legacy/skipped builds).
+export type QaIssue = {
+  id: string;
+  severity: string;
+  observation: string;
+  section_hint: string;
+};
+export type QaInfo = {
+  status: string | null;
+  passed: boolean | null;
+  score: number | null;
+  issues: QaIssue[] | null;
+  error: string | null;
+};
+
 export default function ReviewHost({
   slug,
   businessName,
   liveUrl,
   email,
+  qa,
   lead,
 }: {
   slug: string;
   businessName: string | null;
   liveUrl: string;
   email: string | null;
+  qa: QaInfo;
   lead: LeadContext;
 }) {
   const router = useRouter();
@@ -473,6 +510,54 @@ export default function ReviewHost({
       </div>
 
       <footer className="flex flex-col gap-2 border-t border-white/10 bg-black/90 px-4 py-3">
+        {(() => {
+          const badge = qaBadge(qa.status);
+          const issues = qa.issues ?? [];
+          return (
+            <details className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs">
+              <summary className="flex cursor-pointer items-center justify-between gap-2 text-white/70">
+                <span className="flex items-center gap-2">
+                  <span className={`rounded border px-1.5 py-0.5 font-medium ${badge.cls}`}>
+                    {badge.label}
+                  </span>
+                  {qa.score != null && (
+                    <span className="text-white/50">score {qa.score}</span>
+                  )}
+                </span>
+                {issues.length > 0 && (
+                  <span className="text-white/40">
+                    {issues.length} issue{issues.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </summary>
+              {issues.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {issues.map((it, i) => (
+                    <li key={i} className="text-white/60">
+                      <span
+                        className={
+                          it.severity === "critical"
+                            ? "text-rose-400"
+                            : it.severity === "major"
+                              ? "text-amber-400"
+                              : "text-white/40"
+                        }
+                      >
+                        [{it.severity}]
+                      </span>{" "}
+                      {it.observation}{" "}
+                      <span className="text-white/35">@ {it.section_hint}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : qa.error ? (
+                <p className="mt-2 text-white/60">{qa.error}</p>
+              ) : (
+                <p className="mt-2 text-white/40">No issues recorded for this build.</p>
+              )}
+            </details>
+          );
+        })()}
         <div className="flex items-center gap-3">
           <button
             type="button"
