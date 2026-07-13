@@ -15,13 +15,22 @@ export default async function ReviewPage({ params }: PageProps) {
   // apify_category, location) carried onto every note row, plus the
   // business_name and live_url the chrome already used. No insert is done
   // server-side; this lookup just feeds the client component its context.
-  const { data, error } = await supabase
+  // Newest-built-row-wins: business_slug SHOULD be unique (builder-side
+  // slugAllocator claims per-lead slugs), but historical duplicate groups
+  // exist (same-name chain locations, e.g. keyme-locksmiths ×4) and
+  // .maybeSingle() 406s on >1 rows — turning the whole review window into a
+  // 404. Ordering by build_date desc + limit 1 is deterministic and matches
+  // what the queue page (also build_date desc) visually presents as "the"
+  // lead for a slug.
+  const { data: rows, error } = await supabase
     .from("leads")
     .select(
       "id, business_name, email, business_slug, live_url, build_date, industry, apify_category, location, visual_qa_status",
     )
     .eq("business_slug", slug)
-    .maybeSingle();
+    .order("build_date", { ascending: false, nullsFirst: false })
+    .limit(1);
+  const data = rows?.[0];
 
   // Built sites serve only at lead.live_url (the per-deploy Vercel host). No
   // live_url means there's nothing to iframe — 404 rather than render a
