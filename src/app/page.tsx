@@ -23,18 +23,65 @@ function formatDate(value: string | null): string {
   });
 }
 
+// Count-verified, paginated queue read — same idiom as the builder's
+// leadFilter fetchSuppressionIndex: PostgREST silently truncates any single
+// response at the project's max-rows cap (default 1000) with NO error, so an
+// unpaged read past that size would quietly hide part of the review backlog —
+// and unreviewed means never approved, never emailed. The
+// count-vs-accumulated check fails closed (queue shows its error state) rather
+// than render a silently partial list. Filters, columns, and ordering are
+// identical to the previous unpaged read.
+
+const QUEUE_PAGE = 1000;
+
+async function fetchQueue(supabase: ReturnType<typeof createClient>) {
+  // (1) Exact count first — the yardstick the accumulated pages must match.
+  const { count, error: countError } = await supabase
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "built")
+    .not("email", "is", null)
+    .is("approval_status", null);
+  if (countError) return { data: null, error: countError };
+  if (count == null)
+    return { data: null, error: { message: "queue count unavailable (null count from PostgREST)" } };
+
+  // (2) Page through the queue, preserving the display order.
+  const rows: unknown[] = [];
+  for (let from = 0; from < count; from += QUEUE_PAGE) {
+    const { data, error } = await supabase
+      .from("leads")
+      .select(
+        "id, business_name, industry, location, live_url, business_slug, build_date, visual_qa_status",
+      )
+      .eq("status", "built")
+      .not("email", "is", null)
+      .is("approval_status", null)
+      .order("build_date", { ascending: false })
+      .range(from, from + QUEUE_PAGE - 1);
+    if (error) return { data: null, error };
+    rows.push(...(data ?? []));
+    if (!data || data.length === 0) break; // queue shrank mid-read; count check below catches it
+  }
+
+  // (3) Count-vs-accumulated verification — disagreement means the queue moved
+  // (or was truncated) mid-read; fail closed and let the operator reload.
+  if (rows.length !== count) {
+    return {
+      data: null,
+      error: {
+        message: `queue read incomplete: accumulated ${rows.length} rows but exact count is ${count}`,
+      },
+    };
+  }
+
+  return { data: rows, error: null };
+}
+
 export default async function QueuePage() {
   const supabase = createClient();
 
-  const { data, error } = await supabase
-    .from("leads")
-    .select(
-      "id, business_name, industry, location, live_url, business_slug, build_date, visual_qa_status",
-    )
-    .eq("status", "built")
-    .not("email", "is", null)
-    .is("approval_status", null)
-    .order("build_date", { ascending: false });
+  const { data, error } = await fetchQueue(supabase);
 
   const leads = (data ?? []) as Lead[];
 
