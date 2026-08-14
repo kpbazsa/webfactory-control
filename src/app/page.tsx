@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
+import BuilderStatus from "@/components/BuilderStatus";
 
 type Lead = {
   id: string;
@@ -110,6 +111,10 @@ export default async function QueuePage() {
           </div>
         </div>
       </header>
+
+      {/* Builder liveness — client island polling controller_heartbeat; a
+          fetch failure renders its UNKNOWN state and never breaks the queue. */}
+      <BuilderStatus />
 
       <div className="max-w-5xl mx-auto px-6 py-8">
         {error && (
