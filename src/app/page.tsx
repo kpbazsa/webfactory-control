@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 import BuilderStatus from "@/components/BuilderStatus";
+import { NEEDS_REVIEW, reviewReasons } from "@/lib/reviewReasons";
 
 type Lead = {
   id: string;
@@ -11,6 +12,8 @@ type Lead = {
   live_url: string | null;
   business_slug: string | null;
   build_date: string | null;
+  approval_status: string | null;
+  subpage_failures: unknown;
 };
 
 function formatDate(value: string | null): string {
@@ -30,8 +33,15 @@ function formatDate(value: string | null): string {
 // unpaged read past that size would quietly hide part of the review backlog —
 // and unreviewed means never approved, never emailed. The
 // count-vs-accumulated check fails closed (queue shows its error state) rather
-// than render a silently partial list. Filters, columns, and ordering are
-// identical to the previous unpaged read.
+// than render a silently partial list.
+//
+// The queue is every built, emailable lead with no operator verdict yet: NULL
+// (never reviewed) OR needs_review (the builder marked the ship for a person —
+// a missing page, a render crash, a broken image; reasons in subpage_failures).
+// QUEUE_FILTER is the ONE filter both reads use, so the count and the pages can
+// never disagree by construction. needs_review sorts first (text desc puts
+// 'needs_review' above NULL), then newest build — in SQL, so paging is stable.
+const QUEUE_FILTER = `approval_status.is.null,approval_status.eq.${NEEDS_REVIEW}`;
 
 const QUEUE_PAGE = 1000;
 
@@ -42,7 +52,7 @@ async function fetchQueue(supabase: ReturnType<typeof createClient>) {
     .select("id", { count: "exact", head: true })
     .eq("status", "built")
     .not("email", "is", null)
-    .is("approval_status", null);
+    .or(QUEUE_FILTER);
   if (countError) return { data: null, error: countError };
   if (count == null)
     return { data: null, error: { message: "queue count unavailable (null count from PostgREST)" } };
@@ -53,12 +63,14 @@ async function fetchQueue(supabase: ReturnType<typeof createClient>) {
     const { data, error } = await supabase
       .from("leads")
       .select(
-        "id, business_name, industry, location, live_url, business_slug, build_date, visual_qa_status",
+        "id, business_name, industry, location, live_url, business_slug, build_date, visual_qa_status, approval_status, subpage_failures",
       )
       .eq("status", "built")
       .not("email", "is", null)
-      .is("approval_status", null)
+      .or(QUEUE_FILTER)
+      .order("approval_status", { ascending: false, nullsFirst: false })
       .order("build_date", { ascending: false })
+      .order("id", { ascending: true })
       .range(from, from + QUEUE_PAGE - 1);
     if (error) return { data: null, error };
     rows.push(...(data ?? []));
@@ -85,6 +97,7 @@ export default async function QueuePage() {
   const { data, error } = await fetchQueue(supabase);
 
   const leads = (data ?? []) as Lead[];
+  const needsReviewCount = leads.filter((l) => l.approval_status === NEEDS_REVIEW).length;
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -97,7 +110,8 @@ export default async function QueuePage() {
             <p className="text-sm text-slate-500">
               {error
                 ? "Could not load queue."
-                : `${leads.length} site${leads.length === 1 ? "" : "s"} awaiting review`}
+                : `${leads.length} site${leads.length === 1 ? "" : "s"} awaiting review` +
+                  (needsReviewCount ? ` · ${needsReviewCount} marked needs review` : "")}
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -141,6 +155,11 @@ export default async function QueuePage() {
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-900 truncate">
+                    {lead.approval_status === NEEDS_REVIEW && (
+                      <span className="mr-2 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+                        Needs review
+                      </span>
+                    )}
                     {lead.business_name ?? "(unnamed)"}
                   </p>
                   <p className="text-xs text-slate-500 truncate">
@@ -148,6 +167,14 @@ export default async function QueuePage() {
                       .filter(Boolean)
                       .join(" · ") || "—"}
                   </p>
+                  {lead.approval_status === NEEDS_REVIEW && (() => {
+                    const reasons = reviewReasons(lead.subpage_failures);
+                    return (
+                      <p className="text-xs text-amber-800">
+                        {reasons.length ? reasons.join(" · ") : "No reason recorded (a held build, or the reasons were cleared)"}
+                      </p>
+                    );
+                  })()}
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
                   <span className="text-xs text-slate-500">
