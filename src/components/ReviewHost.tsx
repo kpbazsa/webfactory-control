@@ -80,6 +80,14 @@ export type QaIssue = {
   observation: string;
   section_hint: string;
 };
+// The builder's needs_review mark (leads.approval_status) and its plain-language
+// reasons (lib/reviewReasons over leads.subpage_failures). Shown above the QA
+// badge; the verdict buttons are unchanged and overwrite the mark.
+export type ReviewMark = {
+  needsReview: boolean;
+  reasons: string[];
+};
+
 export type QaInfo = {
   status: string | null;
   passed: boolean | null;
@@ -94,6 +102,7 @@ export default function ReviewHost({
   liveUrl,
   email,
   qa,
+  review,
   lead,
 }: {
   slug: string;
@@ -101,6 +110,7 @@ export default function ReviewHost({
   liveUrl: string;
   email: string | null;
   qa: QaInfo;
+  review: ReviewMark;
   lead: LeadContext;
 }) {
   const router = useRouter();
@@ -260,8 +270,9 @@ export default function ReviewHost({
     }
 
     pushToast(verdict === "approved" ? "Approved" : "Disapproved", "ok");
-    // Back to the queue — the lead is now non-NULL approval_status and the
-    // queue's `.is("approval_status", null)` filter will exclude it.
+    // Back to the queue — the lead is now 'approved' / 'disapproved', and the
+    // queue lists only approval_status NULL or 'needs_review', so it drops out
+    // (a needs_review lead is overwritten here exactly like a NULL one).
     router.push("/");
   }
 
@@ -589,6 +600,22 @@ export default function ReviewHost({
       </div>
 
       <footer className="flex flex-col gap-2 border-t border-white/10 bg-black/90 px-4 py-3">
+        {review.needsReview && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            <p className="font-semibold">Needs review — the builder flagged this ship</p>
+            {review.reasons.length ? (
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-amber-100/80">
+                {review.reasons.map((r, i) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-amber-100/70">
+                No reason recorded on the lead (a held build keeps the live version&apos;s record) — check the build log.
+              </p>
+            )}
+          </div>
+        )}
         {(() => {
           const badge = qaBadge(qa.status);
           const issues = qa.issues ?? [];

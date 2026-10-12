@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import ReviewHost from "@/components/ReviewHost";
+import { NEEDS_REVIEW, reviewReasons } from "@/lib/reviewReasons";
 
 type PageProps = {
   params: { slug: string };
@@ -25,7 +26,7 @@ export default async function ReviewPage({ params }: PageProps) {
   const { data: rows, error } = await supabase
     .from("leads")
     .select(
-      "id, business_name, email, business_slug, live_url, build_date, industry, apify_category, location, visual_qa_status",
+      "id, business_name, email, business_slug, live_url, build_date, industry, apify_category, location, visual_qa_status, approval_status, subpage_failures",
     )
     .eq("business_slug", slug)
     .order("build_date", { ascending: false, nullsFirst: false })
@@ -58,6 +59,12 @@ export default async function ReviewPage({ params }: PageProps) {
       businessName={data.business_name}
       email={data.email ?? null}
       liveUrl={data.live_url}
+      // needs_review: the builder's mark + its reasons (leads.subpage_failures).
+      // Approve / Disapprove overwrite the mark exactly as they overwrite NULL.
+      review={{
+        needsReview: data.approval_status === NEEDS_REVIEW,
+        reasons:     reviewReasons(data.subpage_failures),
+      }}
       qa={{
         status: data.visual_qa_status ?? null,
         passed: qaRun?.passed ?? null,
