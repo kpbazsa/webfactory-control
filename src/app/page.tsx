@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 import BuilderStatus from "@/components/BuilderStatus";
 import { NEEDS_REVIEW, reviewReasons } from "@/lib/reviewReasons";
+import { fetchLiveHolds, fetchStuck, STUCK_AFTER_HOURS } from "@/lib/queueStrips";
 
 type Lead = {
   id: string;
@@ -95,6 +96,9 @@ export default async function QueuePage() {
   const supabase = createClient();
 
   const { data, error } = await fetchQueue(supabase);
+  // Step HG-38b — two read-only strips for holds the queue cannot list. Each
+  // read fails on its own: an error shows in its strip and never hides the queue.
+  const [stuck, liveHolds] = await Promise.all([fetchStuck(supabase, Date.now()), fetchLiveHolds(supabase)]);
 
   const leads = (data ?? []) as Lead[];
   const needsReviewCount = leads.filter((l) => l.approval_status === NEEDS_REVIEW).length;
@@ -131,6 +135,74 @@ export default async function QueuePage() {
       <BuilderStatus />
 
       <div className="max-w-5xl mx-auto px-6 py-8">
+        {(stuck.error || stuck.data.length > 0) && (
+          <section className="mb-6 rounded-md border border-red-200 bg-red-50 px-4 py-3">
+            <h2 className="text-sm font-semibold text-red-900">
+              Stuck{stuck.error ? "" : ` — ${stuck.data.length}`}
+            </h2>
+            <p className="text-xs text-red-800">
+              In &apos;processing&apos; or &apos;provisioning_pending&apos; for more than {STUCK_AFTER_HOURS} h — the build finished or stopped without its DB row. Read-only.
+            </p>
+            {stuck.error ? (
+              <p className="mt-1 font-mono text-xs text-red-700">{stuck.error.message}</p>
+            ) : (
+              <ul className="mt-2 divide-y divide-red-200">
+                {stuck.data.map((l) => (
+                  <li key={l.id} className="py-1.5 flex items-center justify-between gap-4 text-xs">
+                    <span className="min-w-0 truncate text-red-900">
+                      <span className="font-medium">{l.business_name ?? "(unnamed)"}</span>
+                      {` — stuck in ${l.status} since ${formatDate(l.build_started_at)}`}
+                      {l.stuck_alerted_at ? ` · alerted ${formatDate(l.stuck_alerted_at)}` : " · not alerted"}
+                    </span>
+                    {l.business_slug && l.live_url ? (
+                      <Link href={`/review/${l.business_slug}`} className="shrink-0 font-medium text-red-800 underline underline-offset-2">
+                        Review
+                      </Link>
+                    ) : (
+                      <span className="shrink-0 font-mono text-red-700">{l.business_slug ? `client/${l.business_slug} · no live_url` : "no slug"}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {(liveHolds.error || liveHolds.data.length > 0) && (
+          <section className="mb-6 rounded-md border border-orange-200 bg-orange-50 px-4 py-3">
+            <h2 className="text-sm font-semibold text-orange-900">
+              Held on live sites{liveHolds.error ? "" : ` — ${liveHolds.data.length}`}
+            </h2>
+            <p className="text-xs text-orange-800">
+              Approved sites whose record carries a hold or a page that did not ship. Information only — nothing to approve here.
+            </p>
+            {liveHolds.error ? (
+              <p className="mt-1 font-mono text-xs text-orange-700">{liveHolds.error.message}</p>
+            ) : (
+              <ul className="mt-2 divide-y divide-orange-200">
+                {liveHolds.data.map((l) => (
+                  <li key={l.id} className="py-1.5 flex items-start justify-between gap-4 text-xs">
+                    <div className="min-w-0">
+                      <p className="font-medium text-orange-900 truncate">
+                        {l.business_name ?? "(unnamed)"}
+                        {l.status ? <span className="font-normal text-orange-700">{` · ${l.status}`}</span> : null}
+                      </p>
+                      <p className="text-orange-800">{l.reasons.join(" · ") || "Reason not recorded"}</p>
+                    </div>
+                    {l.business_slug && l.live_url ? (
+                      <Link href={`/review/${l.business_slug}`} className="shrink-0 font-medium text-orange-800 underline underline-offset-2">
+                        Review
+                      </Link>
+                    ) : (
+                      <span className="shrink-0 text-orange-700">no url</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
         {error && (
           <div className="mb-6 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">
             <p className="font-medium">Query error</p>
