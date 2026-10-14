@@ -13,8 +13,17 @@
 //                             could not fill (error "<Component>.<prop>: <text>")
 //   - kind "thin_read"      → route "(profile)": the business's site read too
 //                             thin to build from (error "<fields> missing; …")
+//   - kind "held"           → route "(build)": a rebuild was HELD; the row sits on
+//                             the LIVE build's record (error = the hold reason)
+//   - kind "subpages_not_deployed" → route "(subpages)" (or "(service-grouping)"'s
+//                             sibling): the service pages did not go live (error
+//                             "<cause>: <detail>")
+//   - kind "phone_conflict" → route "(refresh)": refreshPreview held a site's link
+//                             fixes over a phone number conflict (error "lead … vs
+//                             built-in … — N link(s) not fixed (--flag)")
 //   - route starting "("    → a pseudo-row ((planner), (service-grouping), …):
-//                             not a page, never a reason here (thin_read aside)
+//                             not a page, never a reason here (the kinds above
+//                             aside — they are read by kind, on any route)
 // Any other kind is shown by its own name, so a later builder rule that adds a
 // kind reads as something rather than nothing.
 
@@ -23,7 +32,29 @@ export const NEEDS_REVIEW = "needs_review";
 type FailureRow = { route?: unknown; kind?: unknown; error?: unknown };
 
 // Kinds with their own wording below; anything else is shown by its name.
-const LABELLED_KINDS = ["render_crash", "broken_image", "blank_prop", "thin_read"];
+const LABELLED_KINDS = ["render_crash", "broken_image", "blank_prop", "thin_read", "held", "subpages_not_deployed", "phone_conflict"];
+
+// A row's error, flattened and cut to its first 80 characters (an ellipsis marks
+// a cut) — enough to say why a page did not build without flooding the queue.
+const ERROR_CLIP = 80;
+function clip(error: unknown): string {
+  if (typeof error !== "string") return "";
+  const flat = error.replace(/\s+/g, " ").trim();
+  return flat.length > ERROR_CLIP ? `${flat.slice(0, ERROR_CLIP)}…` : flat;
+}
+
+// The first error recorded for a route among rows of no kind (a missing page).
+function missingError(rows: FailureRow[], route: string): string {
+  const r = rows.find((x) => x && x.route === route && typeof x.kind !== "string" && typeof x.error === "string" && x.error.trim());
+  return r ? clip(r.error) : "";
+}
+
+// "<cause>: <detail>" → "<cause>" (the whole text when there is no ": ").
+function causeOf(error: unknown): string {
+  if (typeof error !== "string") return "";
+  const i = error.indexOf(": ");
+  return (i >= 0 ? error.slice(0, i) : error).trim();
+}
 
 const PSEUDO_ROUTE_RE = /^\(/;
 
@@ -49,7 +80,12 @@ export function reviewReasons(failures: unknown): string[] {
   const missing = routesOf(rows, (k) => k === null);
   const crashed = routesOf(rows, (k) => k === "render_crash");
   const broken = routesOf(rows, (k) => k === "broken_image");
-  if (missing.length) reasons.push(`Missing page — did not build: ${missing.map(pageName).join(", ")}`);
+  if (missing.length) {
+    const withWhy = missing.some((r) => missingError(rows, r));
+    reasons.push(`Missing page — did not build: ${withWhy
+      ? missing.map((r) => { const why = missingError(rows, r); return why ? `${pageName(r)} — ${why}` : pageName(r); }).join("; ")
+      : missing.map(pageName).join(", ")}`);
+  }
   if (crashed.length) reasons.push(`Render crash — shows an error screen: ${crashed.map(pageName).join(", ")}`);
   if (broken.length) reasons.push(`Broken image — an image never loads on: ${broken.map(pageName).join(", ")}`);
   // One line per unfilled blank: the page and the Component.prop it sits in.
@@ -64,6 +100,28 @@ export function reviewReasons(failures: unknown): string[] {
   if (thin) {
     const fields = typeof thin.error === "string" ? thin.error.split(" missing")[0].trim() : "";
     reasons.push(`Thin site read — the business's site gave too little to build from${fields ? `: ${fields}` : ""}`);
+  }
+  // The (build) pseudo-row: a rebuild was held, the live site was kept.
+  for (const r of rows) {
+    if (r?.kind !== "held") continue;
+    const why = typeof r.error === "string" ? r.error.trim() : "";
+    const line = `Held — the new build was not published; the live site is unchanged${why ? `: ${why}` : ""}`;
+    if (!reasons.includes(line)) reasons.push(line);
+  }
+  // The (subpages) pseudo-row: one line per distinct cause.
+  for (const r of rows) {
+    if (r?.kind !== "subpages_not_deployed") continue;
+    const cause = causeOf(r.error);
+    const tail = cause === "service grouping failed" ? "the site has no service pages" : "only the homepage is live";
+    const line = `Service pages not published — ${cause || "cause not recorded"}; ${tail}`;
+    if (!reasons.includes(line)) reasons.push(line);
+  }
+  // The (refresh) pseudo-row: refreshPreview held a site's link fixes.
+  for (const r of rows) {
+    if (r?.kind !== "phone_conflict") continue;
+    const what = typeof r.error === "string" ? r.error.trim() : "";
+    const line = `Phone conflict — the lead's number and the number built into the site differ; link fixes held${what ? `: ${what}` : ""}`;
+    if (!reasons.includes(line)) reasons.push(line);
   }
   const otherKinds = new Set<string>();
   for (const r of rows) {
