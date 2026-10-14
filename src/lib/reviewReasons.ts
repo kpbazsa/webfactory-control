@@ -49,6 +49,10 @@ function missingError(rows: FailureRow[], route: string): string {
   return r ? clip(r.error) : "";
 }
 
+// subpages_not_deployed causes after which NO service page was planned (builder
+// subpageBuilder S2 / S3); every other cause means only the homepage went live.
+const NO_SERVICE_PAGE_CAUSES = ["service grouping failed", "service planning failed"];
+
 // "<cause>: <detail>" → "<cause>" (the whole text when there is no ": ").
 function causeOf(error: unknown): string {
   if (typeof error !== "string") return "";
@@ -112,7 +116,10 @@ export function reviewReasons(failures: unknown): string[] {
   for (const r of rows) {
     if (r?.kind !== "subpages_not_deployed") continue;
     const cause = causeOf(r.error);
-    const tail = cause === "service grouping failed" ? "the site has no service pages" : "only the homepage is live";
+    // Grouping or planning failed: no service page was planned at all (after a
+    // grouping failure about / contact / gallery may still ship; after a planner
+    // failure only the homepage and the fixed pages that rode its commit do).
+    const tail = NO_SERVICE_PAGE_CAUSES.includes(cause) ? "the site has no service pages" : "only the homepage is live";
     const line = `Service pages not published — ${cause || "cause not recorded"}; ${tail}`;
     if (!reasons.includes(line)) reasons.push(line);
   }
