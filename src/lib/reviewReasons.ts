@@ -21,6 +21,12 @@
 //   - kind "phone_conflict" → route "(refresh)": refreshPreview held a site's link
 //                             fixes over a phone number conflict (error "lead … vs
 //                             built-in … — N link(s) not fixed (--flag)")
+//   - kind "contact_check"  → route "(contact-check)": a generated section shipped
+//                             still failing the contact-render check on its last
+//                             attempt (CONTACT_CHECK_MODE=enforce, builder Step
+//                             HG-42h leadReasonRows.contactCheckRow): { page,
+//                             component, attempts, error, findings[] }. Not a hold
+//                             and not a needs_review mark — information only.
 //   - route starting "("    → a pseudo-row ((planner), (service-grouping), …):
 //                             not a page, never a reason here (the kinds above
 //                             aside — they are read by kind, on any route)
@@ -32,7 +38,7 @@ export const NEEDS_REVIEW = "needs_review";
 type FailureRow = { route?: unknown; kind?: unknown; error?: unknown };
 
 // Kinds with their own wording below; anything else is shown by its name.
-const LABELLED_KINDS = ["render_crash", "broken_image", "blank_prop", "thin_read", "held", "subpages_not_deployed", "phone_conflict"];
+const LABELLED_KINDS = ["render_crash", "broken_image", "blank_prop", "thin_read", "held", "subpages_not_deployed", "phone_conflict", "contact_check"];
 
 // A row's error, flattened and cut to its first 80 characters (an ellipsis marks
 // a cut) — enough to say why a page did not build without flooding the queue.
@@ -61,6 +67,38 @@ function causeOf(error: unknown): string {
 }
 
 const PSEUDO_ROUTE_RE = /^\(/;
+
+// Step L-21 — one contact_check row, as the builder writes it.
+export type ContactCheckItem = { page: string; component: string; attempts: number | null; findings: string[] };
+
+// A finding is one sentence ("Editing phone (set to …) does not reach the page:
+// …"); 160 characters keeps the field name and what stayed stale.
+const FINDING_CLIP = 160;
+function clipFinding(f: unknown): string {
+  const flat = String(f ?? "").replace(/\s+/g, " ").trim();
+  return flat.length > FINDING_CLIP ? `${flat.slice(0, FINDING_CLIP)}…` : flat;
+}
+
+/**
+ * Every contact_check row on a lead (one per shipped section), with the first
+ * `max` findings each, clipped. Pure; [] when there are none.
+ */
+export function contactChecks(failures: unknown, max = 2): ContactCheckItem[] {
+  if (!Array.isArray(failures)) return [];
+  const out: ContactCheckItem[] = [];
+  for (const r of failures as { kind?: unknown; page?: unknown; component?: unknown; attempts?: unknown; findings?: unknown; error?: unknown }[]) {
+    if (!r || r.kind !== "contact_check") continue;
+    const list = Array.isArray(r.findings) ? r.findings.map(clipFinding).filter(Boolean) : [];
+    out.push({
+      page: typeof r.page === "string" && r.page ? r.page : "?",
+      component: typeof r.component === "string" && r.component ? r.component : "?",
+      attempts: typeof r.attempts === "number" ? r.attempts : null,
+      // no findings list (an older or hand-written row) → the row's error line
+      findings: (list.length ? list : [clipFinding(r.error)].filter(Boolean)).slice(0, max),
+    });
+  }
+  return out;
+}
 
 function pageName(route: string): string {
   return route === "/" ? "homepage" : route;
@@ -128,6 +166,11 @@ export function reviewReasons(failures: unknown): string[] {
     if (r?.kind !== "phone_conflict") continue;
     const what = typeof r.error === "string" ? r.error.trim() : "";
     const line = `Phone conflict — the lead's number and the number built into the site differ; link fixes held${what ? `: ${what}` : ""}`;
+    if (!reasons.includes(line)) reasons.push(line);
+  }
+  // The (contact-check) pseudo-row: one line per shipped section.
+  for (const c of contactChecks(rows, 1)) {
+    const line = `Contact details incomplete — ${c.page === "?" ? "?" : pageName(c.page)} ${c.component}${c.findings[0] ? `: ${clip(c.findings[0])}` : ""}`;
     if (!reasons.includes(line)) reasons.push(line);
   }
   const otherKinds = new Set<string>();

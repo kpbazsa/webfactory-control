@@ -10,7 +10,13 @@
 //     a held rebuild, a refreshPreview phone conflict, service pages that did not
 //     go live, a crashing page or a page that did not build.
 // Neither strip writes anything and neither offers Approve / Disapprove.
-import { reviewReasons } from "@/lib/reviewReasons";
+//
+// A third strip (Step L-21): CONTACT CHECK — every lead whose record carries a
+// contact_check row (builder Step HG-42h: a generated section shipped still
+// failing the contact-render check on its last attempt, so an owner's phone /
+// email / address edit may not reach the page). Not a hold, not a needs_review
+// mark, so neither the queue nor the strips above list it.
+import { contactChecks, reviewReasons, type ContactCheckItem } from "@/lib/reviewReasons";
 import type { createClient } from "@/lib/supabase/server";
 
 type Supabase = ReturnType<typeof createClient>;
@@ -130,6 +136,46 @@ export async function fetchLiveHolds(supabase: Supabase): Promise<Result<LiveHol
         id: l.id, business_name: l.business_name, business_slug: l.business_slug, status: l.status, live_url: l.live_url,
         reasons: reviewReasons(l.subpage_failures),
       })),
+    error: null,
+  };
+}
+
+export type ContactCheckLead = {
+  id: string;
+  business_name: string | null;
+  business_slug: string | null;
+  status: string | null;
+  approval_status: string | null;
+  live_url: string | null;
+  checks: ContactCheckItem[];
+};
+
+// jsonb containment: some element of subpage_failures has kind "contact_check".
+// The value is passed as a string: supabase-js turns a JS array into a Postgres
+// array literal ({…}), which is not jsonb.
+export const CONTACT_CHECK_FILTER = JSON.stringify([{ kind: "contact_check" }]);
+
+/**
+ * CONTACT CHECK: subpage_failures @> '[{"kind":"contact_check"}]', any status.
+ * PostgREST: subpage_failures=cs.[{"kind":"contact_check"}]
+ */
+export async function fetchContactChecks(supabase: Supabase): Promise<Result<ContactCheckLead>> {
+  const r = await readAll<{ id: string; business_name: string | null; business_slug: string | null; status: string | null; approval_status: string | null; live_url: string | null; subpage_failures: unknown }>(
+    () => supabase.from("leads").select("id", { count: "exact", head: true })
+      .filter("subpage_failures", "cs", CONTACT_CHECK_FILTER),
+    (from, to) => supabase.from("leads")
+      .select("id, business_name, business_slug, status, approval_status, live_url, subpage_failures")
+      .filter("subpage_failures", "cs", CONTACT_CHECK_FILTER)
+      .order("business_slug", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  if (r.error) return { data: [], error: r.error };
+  return {
+    data: r.data.map((l) => ({
+      id: l.id, business_name: l.business_name, business_slug: l.business_slug, status: l.status,
+      approval_status: l.approval_status, live_url: l.live_url, checks: contactChecks(l.subpage_failures, 2),
+    })).filter((l) => l.checks.length > 0),
     error: null,
   };
 }

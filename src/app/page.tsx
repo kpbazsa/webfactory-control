@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 import BuilderStatus from "@/components/BuilderStatus";
 import { NEEDS_REVIEW, reviewReasons } from "@/lib/reviewReasons";
-import { fetchLiveHolds, fetchStuck, STUCK_AFTER_HOURS } from "@/lib/queueStrips";
+import { fetchContactChecks, fetchLiveHolds, fetchStuck, STUCK_AFTER_HOURS } from "@/lib/queueStrips";
 
 type Lead = {
   id: string;
@@ -98,7 +98,10 @@ export default async function QueuePage() {
   const { data, error } = await fetchQueue(supabase);
   // Step HG-38b — two read-only strips for holds the queue cannot list. Each
   // read fails on its own: an error shows in its strip and never hides the queue.
-  const [stuck, liveHolds] = await Promise.all([fetchStuck(supabase, Date.now()), fetchLiveHolds(supabase)]);
+  // Step L-21 — a third: sections that shipped failing the contact-render check.
+  const [stuck, liveHolds, contactChecked] = await Promise.all([
+    fetchStuck(supabase, Date.now()), fetchLiveHolds(supabase), fetchContactChecks(supabase),
+  ]);
 
   const leads = (data ?? []) as Lead[];
   const needsReviewCount = leads.filter((l) => l.approval_status === NEEDS_REVIEW).length;
@@ -195,6 +198,50 @@ export default async function QueuePage() {
                       </Link>
                     ) : (
                       <span className="shrink-0 text-orange-700">no url</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {(contactChecked.error || contactChecked.data.length > 0) && (
+          <section className="mb-6 rounded-md border border-sky-200 bg-sky-50 px-4 py-3">
+            <h2 className="text-sm font-semibold text-sky-900">
+              Contact check{contactChecked.error ? "" : ` — ${contactChecked.data.length}`}
+            </h2>
+            <p className="text-xs text-sky-800">
+              A generated section shipped still failing the contact check after its last attempt — a phone, email or address may be missing, or an owner&apos;s edit may not reach it. Information only.
+            </p>
+            {contactChecked.error ? (
+              <p className="mt-1 font-mono text-xs text-sky-700">{contactChecked.error.message}</p>
+            ) : (
+              <ul className="mt-2 divide-y divide-sky-200">
+                {contactChecked.data.map((l) => (
+                  <li key={l.id} className="py-1.5 flex items-start justify-between gap-4 text-xs">
+                    <div className="min-w-0">
+                      <p className="font-medium text-sky-900 truncate">
+                        {l.business_name ?? "(unnamed)"}
+                        <span className="font-normal text-sky-700">{` · ${[l.status, l.approval_status].filter(Boolean).join(" · ") || "no status"}`}</span>
+                      </p>
+                      {l.checks.map((c, i) => (
+                        <div key={i} className="mt-0.5">
+                          <p className="text-sky-900">
+                            {`${c.page === "/" ? "homepage" : c.page} · ${c.component}${c.attempts != null ? ` · ${c.attempts} attempt${c.attempts === 1 ? "" : "s"}` : ""}`}
+                          </p>
+                          {c.findings.map((f, j) => (
+                            <p key={j} className="pl-3 text-sky-800">{f}</p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                    {l.business_slug && l.live_url ? (
+                      <Link href={`/review/${l.business_slug}`} className="shrink-0 font-medium text-sky-800 underline underline-offset-2">
+                        Review
+                      </Link>
+                    ) : (
+                      <span className="shrink-0 text-sky-700">no url</span>
                     )}
                   </li>
                 ))}
